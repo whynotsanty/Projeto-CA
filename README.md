@@ -54,23 +54,35 @@ UTC ISO 8601 antes de qualquer publicacao.
 - RSA-OAEP protege a chave do `trace_vault` para o Arbiter.
 - O `linkability_tag` e deterministico por membro e por relatorio, permitindo
 	impedir autocorroboracao e corroboracao duplicada sem expor o membro.
-- `TrustedTimestampAuthority` assina tokens que ficam ligados ao hash do
-	relatorio e permitem verificar o timestamp.
+- `TrustedTimestampAuthority` assina tokens ligados ao hash do relatorio e
+	permite verificar o timestamp.
 
 Esta e uma simulacao simples de group signatures, nao uma construcao academica
-de group signatures. Essa limitacao e deliberada e deve ser discutida no
-relatorio.
+completa. Essa limitacao e deliberada e deve ser discutida no relatorio.
 
 ## Componentes
 
-- `models.py`: JSON validado de incidentes.
+- `models.py`: modelo JSON validado dos incidentes.
 - `fed_fernet.py`: envelope cifrado, assinatura e trace do Arbiter.
 - `coordinator.py`: registo, revogacao, persistencia e rotacao de epochs.
 - `broker.py`: broker local pull-based com armazenamento atomico em JSON.
+- `broker_network.py`: servidor e cliente HTTP do broker, com suporte opcional
+	para Tor.
 - `federation_service.py`: publicacao, pull, corroboracao e disputas.
 - `tsa.py`: TSA local verificavel para testes.
-- `tor_transport.py`: transporte SOCKS5 para ligar clientes a um broker atraves
+- `tor_transport.py`: transporte SOCKS5 para ligar clientes ao broker atraves
 	de Tor (`127.0.0.1:9050` por defeito).
+
+O estado do Coordinator recebe uma chave AES-256 separada no construtor. Essa
+chave nao deve ser guardada no mesmo ficheiro JSON; deve ser fornecida pelo
+ambiente seguro do processo do Coordinator. Os epochs ficam cifrados com
+AES-GCM dentro do estado persistente.
+
+O `TrustedTimestampAuthority` e uma TSA local verificavel para o prototipo.
+Para uma implantacao real deve ser substituida por uma TSA RFC 3161 e a chave
+publica da TSA deve ser configurada como confiavel. O `TorSocks5Transport`
+requer um daemon Tor ativo; sem esse daemon, o broker HTTP funciona apenas por
+ligacao direta para testes locais.
 
 ## Testes
 
@@ -81,4 +93,4 @@ python -m unittest -v
 
 A suite cobre envelopes, adulteracao, chaves erradas, membros autorizados,
 corroboracao unica, revogacao, rotacao de chaves, persistencia, TSA, pull
-offline e confidencialidade perante o broker.
+offline, broker HTTP e confidencialidade perante o broker.

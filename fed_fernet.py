@@ -1,8 +1,8 @@
-"""Simple group-signature simulator for the FedFernet project.
+"""Simulador simples de group signatures para o projeto FedFernet.
 
-Each member signs with RSA-PSS. The federation can validate the signature
-against its public member keys without learning which key matched, while the
-Arbiter-only vault can reveal the member when tracing is authorized.
+Cada membro assina com RSA-PSS. A federacao valida a assinatura contra as
+chaves publicas sem saber qual chave correspondeu; o cofre do Arbiter pode
+revelar o membro quando o rastreio e autorizado.
 """
 
 from __future__ import annotations
@@ -23,13 +23,13 @@ from utils_crypto import load_private_key, load_public_key, sign, verify
 
 
 class FederationGroup:
-    """Registry of authorized member public keys for the simple simulation."""
+    """Registo de chaves publicas autorizadas na simulacao."""
 
     def __init__(self) -> None:
         self._members: dict[str, bytes] = {}
 
     def add_member(self, member_id: str, public_key_pem: bytes) -> None:
-        """Register a member public key in the federation."""
+        """Regista uma chave publica de membro na federacao."""
         if not member_id:
             raise ValueError("member_id is required")
         if member_id in self._members:
@@ -38,26 +38,26 @@ class FederationGroup:
         self._members[member_id] = public_key_pem
 
     def remove_member(self, member_id: str) -> None:
-        """Remove a member from the federation."""
+        """Remove um membro da federacao."""
         try:
             del self._members[member_id]
         except KeyError as exc:
             raise ValueError(f"member is not registered: {member_id}") from exc
 
     def verify(self, plaintext: bytes, signature: bytes) -> bool:
-        """Verify membership without revealing which member matched."""
+        """Verifica a participacao sem revelar qual membro correspondeu."""
         return FedFernet.verify_group_signature(
             plaintext, signature, list(self._members.values())
         )
 
     @property
     def member_ids(self) -> tuple[str, ...]:
-        """Return registered identifiers for administration and tests."""
+        """Devolve identificadores registados para administracao e testes."""
         return tuple(self._members)
 
 
 class FedFernet:
-    """Create and open authenticated, encrypted federation envelopes."""
+    """Cria e abre envelopes cifrados e autenticados da federacao."""
 
     VERSION = 1
     NONCE_SIZE = 12
@@ -74,14 +74,12 @@ class FedFernet:
         *,
         epoch: int = 0,
     ) -> bytes:
-        """Create an AES-256-GCM envelope.
+        """Cria um envelope AES-256-GCM.
 
-        The member signs ``plaintext`` with RSA-PSS. The member identity,
-        public key and signature are placed in an Arbiter-only hybrid vault:
-        AES-GCM protects the vault contents and RSA-OAEP protects its fresh
-        AES key. The deterministic HMAC tag is reserved for corroboration
-        de-duplication. The TSA token is opaque and authenticated as part of
-        the envelope. ``epoch`` identifies the federation key generation.
+        O membro assina o ``plaintext`` com RSA-PSS. A identidade, a chave
+        publica e a assinatura ficam num cofre hibrido do Arbiter. AES-GCM
+        protege o cofre e RSA-OAEP protege a sua chave AES. O HMAC deterministico
+        impede corroboracoes duplicadas. O token TSA e incluido e autenticado.
         """
         _require_aes_key(federation_key)
         if not member_id or not report_id:
@@ -145,12 +143,10 @@ class FedFernet:
         token: bytes,
         federation_key: bytes,
     ) -> dict[str, Any]:
-        """Decrypt an envelope and validate its AES-GCM authentication tag.
+        """Abre o envelope e valida a autenticacao AES-GCM.
 
-        The normal open path does not decrypt the Arbiter vault or reveal the
-        member identity. Signature verification is performed by ``open_trace``
-        in this first logical-simulator version. A future group-signature
-        verifier will allow all members to verify membership anonymously.
+        O caminho normal nao abre o cofre do Arbiter nem revela a identidade.
+        A assinatura pode ser verificada por ``open_trace`` ou pela simulacao.
         """
         _require_aes_key(federation_key)
         parts = token.split(b".", 2)

@@ -6,11 +6,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from broker import LocalBroker
+from broker_network import BrokerHttpClient, BrokerHttpServer
 from coordinator import FederationCoordinator
 from federation_service import FederationService
 from models import IncidentReport
 from tsa import TrustedTimestampAuthority
 from utils_crypto import generate_rsa_key_pair
+from utils_crypto import generate_aes_key
 
 
 class FederationProtocolTests(unittest.TestCase):
@@ -21,7 +23,8 @@ class FederationProtocolTests(unittest.TestCase):
         self.tsa = TrustedTimestampAuthority()
         self.tempdir = tempfile.TemporaryDirectory()
         root = Path(self.tempdir.name)
-        self.coordinator = FederationCoordinator(root / "coordinator.json")
+        self.state_key = generate_aes_key()
+        self.coordinator = FederationCoordinator(root / "coordinator.json", self.state_key)
         self.coordinator.register_member("member-a", self.member_a_public)
         self.coordinator.register_member("member-b", self.member_b_public)
         self.coordinator.save()
@@ -84,6 +87,31 @@ class FederationProtocolTests(unittest.TestCase):
                 "member-a",
                 self.member_a_private,
             )
+        self.assertEqual(self.service.count_corroborations(self.report.report_id), 1)
+
+    def test_dispute_is_traceable_by_the_arbiter(self) -> None:
+        dispute = self.service.publish_dispute(
+            self.report.report_id,
+            "os indicadores nao correspondem ao periodo observado",
+            "member-b",
+            self.member_b_private,
+        )
+        self.assertEqual(
+            self.service.trace_dispute(dispute, self.arbiter_private), "member-b"
+        )
+
+    def test_replayed_timestamp_token_is_rejected(self) -> None:
+        report_message = self.service.publish_report(
+            self.report, "member-a", self.member_a_private
+        )
+        self.broker.publish(
+            report_message.payload,
+            kind="report",
+            report_id=self.report.report_id,
+            epoch=report_message.epoch,
+        )
+        with self.assertRaises(ValueError):
+            self.service.pull_reports()
 
     def test_revocation_rotates_epoch_and_preserves_old_history(self) -> None:
         self.service.publish_report(self.report, "member-a", self.member_a_private)
@@ -112,10 +140,24 @@ class FederationProtocolTests(unittest.TestCase):
 
     def test_coordinator_state_round_trip(self) -> None:
         state_path = Path(self.tempdir.name) / "coordinator.json"
-        restored = FederationCoordinator(state_path)
+        restored = FederationCoordinator(state_path, self.state_key)
         self.assertEqual(restored.active_member_ids(), ("member-a", "member-b"))
         self.assertEqual(restored.current_key(), self.coordinator.current_key())
         json.loads(state_path.read_text(encoding="utf-8"))
+
+    def test_http_broker_publishes_and_pulls_opaque_payloads(self) -> None:
+        server = BrokerHttpServer(str(Path(self.tempdir.name) / "http-broker"))
+        server.start()
+        try:
+            host, port = server.address
+            client = BrokerHttpClient(host, port)
+            message = client.publish(
+                b"FF1.0.encrypted", kind="report", report_id=self.report.report_id, epoch=0
+            )
+            self.assertEqual(client.pull()[0], message)
+            self.assertEqual(client.pull()[0].payload, b"FF1.0.encrypted")
+        finally:
+            server.stop()
 
 
 if __name__ == "__main__":

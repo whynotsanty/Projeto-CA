@@ -1,4 +1,4 @@
-"""Validated JSON models required by the federation protocol."""
+"""Modelos JSON validados exigidos pelo protocolo da federacao."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def _parse_utc(value: str) -> datetime:
 
 @dataclass(frozen=True)
 class IncidentReport:
-    """The exact report content required by the assignment."""
+    """Conteudo exato do relatorio exigido pelo enunciado."""
 
     report_id: str
     incident_type: str

@@ -1,4 +1,4 @@
-"""A pull-based broker that stores opaque encrypted publications."""
+"""Broker pull-based que armazena publicacoes cifradas e opacas."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ class BrokerMessage:
 
 
 class LocalBroker:
-    """Filesystem broker used for deterministic offline and integration tests."""
+    """Broker baseado no sistema de ficheiros para testes offline."""
 
     def __init__(self, storage_path: str | Path) -> None:
         self.storage_path = Path(storage_path)

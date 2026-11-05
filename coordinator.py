@@ -1,19 +1,25 @@
-"""Persistent Federation Coordinator state and key epochs."""
+"""Estado persistente do Coordinator e epochs de chaves."""
 
 from __future__ import annotations
 
 import base64
 import json
+import secrets
 from pathlib import Path
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from utils_crypto import generate_aes_key, load_public_key
 
 
 class FederationCoordinator:
-    """Manage members, revocation and federation encryption key epochs."""
+    """Gere membros, revogacao e epochs das chaves da federacao."""
 
-    def __init__(self, state_path: str | Path) -> None:
+    def __init__(self, state_path: str | Path, state_encryption_key: bytes) -> None:
         self.state_path = Path(state_path)
+        if len(state_encryption_key) != 32:
+            raise ValueError("a chave do estado deve ter 32 bytes")
+        self._state_encryption_key = state_encryption_key
         self._members: dict[str, str] = {}
         self._revoked: set[str] = set()
         self._epochs: dict[str, str] = {}
@@ -39,6 +45,7 @@ class FederationCoordinator:
         load_public_key(public_key_pem)
         self._members[member_id] = self._encode(public_key_pem)
         self._revoked.discard(member_id)
+        self.save()
 
     def revoke_member(self, member_id: str) -> None:
         if member_id not in self._members:
@@ -57,7 +64,7 @@ class FederationCoordinator:
         ]
 
     def all_public_keys(self) -> list[bytes]:
-        """Return current and historical member keys for old reports."""
+        """Devolve chaves atuais e historicas para validar relatorios antigos."""
         return [self._decode(value) for value in self._members.values()]
 
     def active_member_ids(self) -> tuple[str, ...]:
@@ -85,16 +92,23 @@ class FederationCoordinator:
     def rotate_key(self) -> int:
         self._current_epoch += 1
         self._epochs[str(self._current_epoch)] = self._encode(generate_aes_key())
+        self.save()
         return self._current_epoch
 
     def save(self) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        epochs_data = json.dumps(self._epochs, sort_keys=True).encode("utf-8")
+        nonce = secrets.token_bytes(12)
+        encrypted_epochs = AESGCM(self._state_encryption_key).encrypt(
+            nonce, epochs_data, b"FedFernet:coordinator-state:v1"
+        )
         state = {
             "version": 1,
             "current_epoch": self._current_epoch,
             "members": self._members,
             "revoked_members": sorted(self._revoked),
-            "epochs": self._epochs,
+            "epochs_nonce": self._encode(nonce),
+            "epochs_ciphertext": self._encode(encrypted_epochs),
         }
         temporary = self.state_path.with_suffix(self.state_path.suffix + ".tmp")
         temporary.write_text(json.dumps(state, sort_keys=True, indent=2), encoding="utf-8")
@@ -107,5 +121,10 @@ class FederationCoordinator:
         self._current_epoch = int(state["current_epoch"])
         self._members = dict(state["members"])
         self._revoked = set(state["revoked_members"])
-        self._epochs = dict(state["epochs"])
+        nonce = self._decode(state["epochs_nonce"])
+        encrypted_epochs = self._decode(state["epochs_ciphertext"])
+        epochs_data = AESGCM(self._state_encryption_key).decrypt(
+            nonce, encrypted_epochs, b"FedFernet:coordinator-state:v1"
+        )
+        self._epochs = dict(json.loads(epochs_data))
         self.current_key()

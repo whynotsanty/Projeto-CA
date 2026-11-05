@@ -1,4 +1,4 @@
-"""Application flow connecting reports, Coordinator, TSA and broker."""
+"""Fluxo da aplicacao entre relatorios, Coordinator, TSA e broker."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class PulledReport:
 
 
 class FederationService:
-    """Publish and pull authenticated reports through an untrusted broker."""
+    """Publica e recupera relatorios autenticados atraves de um broker nao confiavel."""
 
     def __init__(
         self,
@@ -37,6 +37,27 @@ class FederationService:
         self.broker = broker
         self.arbiter_public_key_pem = arbiter_public_key_pem
         self.tsa = tsa
+        self._timestamp_by_message: dict[str, str] = {}
+
+    def _verify_timestamp(self, message: BrokerMessage, payload: bytes, token: bytes) -> None:
+        try:
+            timestamp_data = json.loads(token)
+            serial = str(timestamp_data["serial"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("timestamp token invalido") from exc
+        previous_message = next(
+            (
+                message_id
+                for message_id, previous_serial in self._timestamp_by_message.items()
+                if previous_serial == serial
+            ),
+            None,
+        )
+        if previous_message is not None and previous_message != message.message_id:
+            raise ValueError("timestamp token repetido")
+        if not self.tsa.verify(token, payload, self.tsa.public_key_pem):
+            raise ValueError("timestamp token invalido")
+        self._timestamp_by_message[message.message_id] = serial
 
     def _require_active_member(self, member_id: str, private_key_pem: bytes) -> None:
         if not self.coordinator.is_active(member_id):
@@ -90,12 +111,61 @@ class FederationService:
             ):
                 raise ValueError("report is not signed by an active member")
             report = IncidentReport.from_json(plaintext)
-            if not self.tsa.verify(
-                envelope["timestamp_token"], plaintext, self.tsa.public_key_pem
-            ):
-                raise ValueError("invalid trusted timestamp")
+            self._verify_timestamp(message, plaintext, envelope["timestamp_token"])
             pulled.append(PulledReport(message, report, envelope))
         return pulled
+
+    def pull_corroborations(
+        self, report_id: str, after_sequence: int = 0
+    ) -> list[dict[str, object]]:
+        """Devolve corroboracoes validas e distintas de um relatorio."""
+        result: list[dict[str, object]] = []
+        tags: set[bytes] = set()
+        for message in self.broker.pull(after_sequence):
+            if message.kind != "corroboration" or message.report_id != report_id:
+                continue
+            envelope = FedFernet.open(
+                message.payload, self.coordinator.key_for_epoch(message.epoch)
+            )
+            content = envelope["plaintext"]
+            if not isinstance(content, bytes):
+                raise ValueError("corroboracao invalida")
+            value = json.loads(content)
+            if value != {"report_id": report_id, "type": "corroboration"}:
+                raise ValueError("corroboracao invalida")
+            if not FedFernet.verify_group_signature(
+                content,
+                envelope["group_signature"],
+                self.coordinator.all_public_keys(),
+            ):
+                raise ValueError("assinatura de corroboracao invalida")
+            self._verify_timestamp(message, content, envelope["timestamp_token"])
+            tag = envelope["linkability_tag"]
+            if not isinstance(tag, bytes) or tag in tags:
+                continue
+            tags.add(tag)
+            result.append({"message": message, "envelope": envelope})
+        return result
+
+    def count_corroborations(self, report_id: str) -> int:
+        return len(self.pull_corroborations(report_id))
+
+    def trace_dispute(self, message: BrokerMessage, arbiter_private_key_pem: bytes) -> str:
+        """Devolve ao Arbiter o membro por tras de uma disputa valida."""
+        if message.kind != "dispute":
+            raise ValueError("a mensagem nao e uma disputa")
+        envelope = FedFernet.open(
+            message.payload, self.coordinator.key_for_epoch(message.epoch)
+        )
+        content = envelope["plaintext"]
+        if not isinstance(content, bytes):
+            raise ValueError("disputa invalida")
+        value = json.loads(content)
+        if value.get("type") != "dispute" or value.get("report_id") != message.report_id:
+            raise ValueError("disputa invalida")
+        return FedFernet.open_trace(
+            envelope["trace_vault"], arbiter_private_key_pem, content
+        )
 
     def publish_corroboration(
         self,

@@ -1,4 +1,4 @@
-"""Cryptographic helpers for the FedFernet prototype."""
+"""Funcoes criptograficas auxiliares do prototipo FedFernet."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.hashes import SHA256
 
 
 def generate_rsa_key_pair(key_size: int = 2048) -> tuple[bytes, bytes]:
-    """Return an RSA private/public key pair serialized as PEM bytes."""
+    """Devolve um par de chaves RSA em bytes PEM."""
     if key_size < 2048:
         raise ValueError("RSA keys must have at least 2048 bits")
 
@@ -28,12 +28,12 @@ def generate_rsa_key_pair(key_size: int = 2048) -> tuple[bytes, bytes]:
 
 
 def generate_aes_key() -> bytes:
-    """Return a fresh 256-bit AES key."""
+    """Devolve uma nova chave AES de 256 bits."""
     return secrets.token_bytes(32)
 
 
 def load_private_key(private_pem: bytes) -> rsa.RSAPrivateKey:
-    """Load an unencrypted PEM-encoded RSA private key."""
+    """Carrega uma chave privada RSA PEM sem palavra-passe."""
     key = serialization.load_pem_private_key(private_pem, password=None)
     if not isinstance(key, rsa.RSAPrivateKey):
         raise TypeError("Expected an RSA private key")
@@ -41,7 +41,7 @@ def load_private_key(private_pem: bytes) -> rsa.RSAPrivateKey:
 
 
 def load_public_key(public_pem: bytes) -> rsa.RSAPublicKey:
-    """Load a PEM-encoded RSA public key."""
+    """Carrega uma chave publica RSA PEM."""
     key = serialization.load_pem_public_key(public_pem)
     if not isinstance(key, rsa.RSAPublicKey):
         raise TypeError("Expected an RSA public key")
@@ -49,7 +49,7 @@ def load_public_key(public_pem: bytes) -> rsa.RSAPublicKey:
 
 
 def sign(private_key: rsa.RSAPrivateKey, data: bytes) -> bytes:
-    """Sign data with RSA-PSS and SHA-256."""
+    """Assina dados com RSA-PSS e SHA-256."""
     return private_key.sign(
         data,
         padding.PSS(mgf=padding.MGF1(SHA256()), salt_length=padding.PSS.MAX_LENGTH),
@@ -58,7 +58,7 @@ def sign(private_key: rsa.RSAPrivateKey, data: bytes) -> bytes:
 
 
 def verify(public_key: rsa.RSAPublicKey, signature: bytes, data: bytes) -> None:
-    """Verify an RSA-PSS signature or raise ``InvalidSignature``."""
+    """Verifica uma assinatura RSA-PSS ou lanca ``InvalidSignature``."""
     public_key.verify(
         signature,
         data,

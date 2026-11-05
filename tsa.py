@@ -1,11 +1,11 @@
-"""Verifiable trusted timestamp tokens for the federation prototype."""
+"""Tokens de timestamp confiavel verificaveis para o prototipo."""
 
 from __future__ import annotations
 
 import base64
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from cryptography.hazmat.primitives import serialization
@@ -14,7 +14,7 @@ from utils_crypto import generate_rsa_key_pair, load_private_key, load_public_ke
 
 
 class TrustedTimestampAuthority:
-    """Issue signed timestamp tokens and verify their bound payload."""
+    """Emite tokens assinados e verifica a carga associada."""
 
     def __init__(self, private_key_pem: bytes | None = None) -> None:
         if private_key_pem is None:
@@ -47,13 +47,28 @@ class TrustedTimestampAuthority:
         return json.dumps(token, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
     @staticmethod
-    def verify(token: bytes, payload: bytes, tsa_public_key_pem: bytes) -> bool:
-        value = json.loads(token)
-        signature = base64.urlsafe_b64decode(value.pop("signature").encode("ascii"))
-        encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        if value.get("version") != 1 or value.get("sha256") != hashlib.sha256(payload).hexdigest():
-            return False
+    def verify(
+        token: bytes,
+        payload: bytes,
+        tsa_public_key_pem: bytes,
+        *,
+        maximum_future_seconds: int = 5,
+    ) -> bool:
         try:
+            value = json.loads(token)
+            signature = base64.urlsafe_b64decode(value.pop("signature").encode("ascii"))
+            issued_at = datetime.fromisoformat(value["issued_at"].replace("Z", "+00:00"))
+            encoded = json.dumps(
+                value, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            if value.get("version") != 1:
+                return False
+            if value.get("sha256") != hashlib.sha256(payload).hexdigest():
+                return False
+            if issued_at > datetime.now(timezone.utc) + timedelta(
+                seconds=maximum_future_seconds
+            ):
+                return False
             verify(load_public_key(tsa_public_key_pem), signature, encoded)
         except Exception:
             return False

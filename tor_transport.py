@@ -1,4 +1,4 @@
-"""Minimal SOCKS5 transport for routing broker connections through Tor."""
+"""Transporte SOCKS5 minimo para encaminhar ligacoes pelo Tor."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import struct
 
 
 class TorSocks5Transport:
-    """Open TCP connections through a local Tor SOCKS5 proxy."""
+    """Abre ligacoes TCP atraves de um proxy SOCKS5 local do Tor."""
 
     def __init__(self, proxy_host: str = "127.0.0.1", proxy_port: int = 9050) -> None:
         self.proxy_host = proxy_host
