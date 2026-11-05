@@ -10,7 +10,12 @@ from broker_network import BrokerHttpClient, BrokerHttpServer
 from coordinator import FederationCoordinator
 from federation_service import FederationService
 from models import IncidentReport
-from mqtt_broker import MqttBrokerClient, TOPIC_RELATORIOS
+from mqtt_broker import (
+    MqttBrokerClient,
+    TOPIC_EPOCHS,
+    TOPIC_RELATORIOS,
+    TOPIC_REVOGACOES,
+)
 from tsa import TrustedTimestampAuthority
 from utils_crypto import generate_rsa_key_pair
 from utils_crypto import generate_aes_key
@@ -46,8 +51,8 @@ class FakeMqttClient:
         self.published.append((topic, payload, qos))
         return FakeMqttResult()
 
-    def receive(self, payload: bytes) -> None:
-        message = type("Mensagem", (), {"payload": payload})()
+    def receive(self, payload: bytes, topic: str = TOPIC_RELATORIOS) -> None:
+        message = type("Mensagem", (), {"payload": payload, "topic": topic})()
         self.on_message(self, None, message)
 
 
@@ -173,6 +178,9 @@ class FederationProtocolTests(unittest.TestCase):
             self.report.report_id,
             new_report.report_id,
         })
+        revocations = self.coordinator.revocation_list()["revoked_members"]
+        self.assertEqual(revocations[0]["member_id"], "member-a")
+        self.assertEqual(revocations[0]["effective_epoch"], self.coordinator.current_epoch)
 
     def test_coordinator_state_round_trip(self) -> None:
         state_path = Path(self.tempdir.name) / "coordinator.json"
@@ -263,6 +271,17 @@ class FederationProtocolTests(unittest.TestCase):
             cliente.receive(json.dumps(recebido).encode("utf-8"))
             mensagens = mqtt_broker.pull()
             self.assertEqual(len(mensagens), 2)
+
+            lista_revogacao = self.coordinator.revocation_list()
+            mqtt_broker.publish_control(TOPIC_REVOGACOES, lista_revogacao)
+            mqtt_broker.publish_control(
+                TOPIC_EPOCHS,
+                {"version": 1, "current_epoch": self.coordinator.current_epoch},
+            )
+            cliente.receive(
+                json.dumps(lista_revogacao).encode("utf-8"), TOPIC_REVOGACOES
+            )
+            self.assertEqual(mqtt_broker.control_messages[-1][0], TOPIC_REVOGACOES)
         finally:
             mqtt_broker.close()
 

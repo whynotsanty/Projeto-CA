@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import json
 import secrets
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -22,6 +24,7 @@ class FederationCoordinator:
         self._state_encryption_key = state_encryption_key
         self._members: dict[str, str] = {}
         self._revoked: set[str] = set()
+        self._revocations: dict[str, dict[str, Any]] = {}
         self._epochs: dict[str, str] = {}
         self._current_epoch = 0
         if self.state_path.exists():
@@ -42,15 +45,28 @@ class FederationCoordinator:
             raise ValueError("member_id is required")
         if member_id in self._members and member_id not in self._revoked:
             raise ValueError("member is already registered")
+        if member_id in self._revoked and self.member_public_key(member_id) == public_key_pem:
+            raise ValueError("a chave de um membro revogado nao pode ser reutilizada")
         load_public_key(public_key_pem)
         self._members[member_id] = self._encode(public_key_pem)
         self._revoked.discard(member_id)
+        self._revocations.pop(member_id, None)
         self.save()
 
-    def revoke_member(self, member_id: str) -> None:
+    def revoke_member(self, member_id: str, reason: str = "") -> None:
         if member_id not in self._members:
             raise ValueError("member is not registered")
+        if member_id in self._revoked:
+            raise ValueError("member ja esta revogado")
         self._revoked.add(member_id)
+        self._revocations[member_id] = {
+            "member_id": member_id,
+            "revoked_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+                "+00:00", "Z"
+            ),
+            "effective_epoch": self._current_epoch + 1,
+            "reason": reason,
+        }
         self.rotate_key()
 
     def is_active(self, member_id: str) -> bool:
@@ -69,6 +85,17 @@ class FederationCoordinator:
 
     def active_member_ids(self) -> tuple[str, ...]:
         return tuple(member_id for member_id in self._members if self.is_active(member_id))
+
+    def revocation_list(self) -> dict[str, object]:
+        """Devolve a CRL atual para distribuicao aos membros ativos."""
+        return {
+            "version": 1,
+            "current_epoch": self._current_epoch,
+            "revoked_members": [
+                self._revocations[member_id]
+                for member_id in sorted(self._revocations)
+            ],
+        }
 
     @property
     def current_epoch(self) -> int:
@@ -107,6 +134,7 @@ class FederationCoordinator:
             "current_epoch": self._current_epoch,
             "members": self._members,
             "revoked_members": sorted(self._revoked),
+            "revocations": self._revocations,
             "epochs_nonce": self._encode(nonce),
             "epochs_ciphertext": self._encode(encrypted_epochs),
         }
@@ -121,6 +149,7 @@ class FederationCoordinator:
         self._current_epoch = int(state["current_epoch"])
         self._members = dict(state["members"])
         self._revoked = set(state["revoked_members"])
+        self._revocations = dict(state.get("revocations", {}))
         nonce = self._decode(state["epochs_nonce"])
         encrypted_epochs = self._decode(state["epochs_ciphertext"])
         epochs_data = AESGCM(self._state_encryption_key).decrypt(

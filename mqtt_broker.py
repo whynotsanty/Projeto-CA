@@ -18,6 +18,8 @@ TOPIC_PREFIX = "fed/v1"
 TOPIC_RELATORIOS = f"{TOPIC_PREFIX}/relatorios"
 TOPIC_CORROBORACOES = f"{TOPIC_PREFIX}/corroboracoes"
 TOPIC_DISPUTAS = f"{TOPIC_PREFIX}/disputas"
+TOPIC_REVOGACOES = f"{TOPIC_PREFIX}/coordenador/revogacoes"
+TOPIC_EPOCHS = f"{TOPIC_PREFIX}/coordenador/epochs"
 
 
 def topic_for(kind: str, report_id: str | None) -> str:
@@ -53,6 +55,7 @@ class MqttBrokerClient:
         self.port = port
         self.client_id = client_id or f"fed-client-{uuid4()}"
         self._seen_message_ids: set[str] = set()
+        self._control_messages: list[tuple[str, dict[str, object]]] = []
         factory = mqtt_client_factory or self._default_client_factory
         self._client = factory(self.client_id)
         if username is not None:
@@ -91,13 +94,26 @@ class MqttBrokerClient:
             self._connection_error = f"broker MQTT recusou a ligacao: {reason_code}"
             self._connection_event.set()
             return
-        client.subscribe([(TOPIC_RELATORIOS, 1), (f"{TOPIC_CORROBORACOES}/#", 1), (f"{TOPIC_DISPUTAS}/#", 1)])
+        client.subscribe(
+            [
+                (TOPIC_RELATORIOS, 1),
+                (f"{TOPIC_CORROBORACOES}/#", 1),
+                (f"{TOPIC_DISPUTAS}/#", 1),
+                (TOPIC_REVOGACOES, 1),
+                (TOPIC_EPOCHS, 1),
+            ]
+        )
         self._connected = True
         self._connection_event.set()
 
     def _on_message(self, _client: Any, _userdata: Any, message: Any) -> None:
         try:
             value = json.loads(message.payload)
+            topic = str(getattr(message, "topic", ""))
+            if topic in {TOPIC_REVOGACOES, TOPIC_EPOCHS}:
+                if isinstance(value, dict):
+                    self._control_messages.append((topic, value))
+                return
             message_id = str(value["message_id"])
             if message_id in self._seen_message_ids:
                 return
@@ -111,6 +127,18 @@ class MqttBrokerClient:
             self._seen_message_ids.add(message_id)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             return
+
+    def publish_control(self, topic: str, value: dict[str, object]) -> None:
+        """Publica uma CRL ou atualizacao de epoch do Coordinator."""
+        if topic not in {TOPIC_REVOGACOES, TOPIC_EPOCHS}:
+            raise ValueError("topico de controlo invalido")
+        if not self._connected:
+            raise ConnectionError("cliente MQTT nao esta ligado")
+        result = self._client.publish(
+            topic, json.dumps(value, sort_keys=True).encode("utf-8"), qos=1
+        )
+        if result.rc != mqtt.MQTT_ERR_SUCCESS:
+            raise ConnectionError(f"falha ao publicar MQTT: {result.rc}")
 
     def publish(
         self,
@@ -142,4 +170,10 @@ class MqttBrokerClient:
             TOPIC_RELATORIOS,
             f"{TOPIC_CORROBORACOES}/#",
             f"{TOPIC_DISPUTAS}/#",
+            TOPIC_REVOGACOES,
+            TOPIC_EPOCHS,
         )
+
+    @property
+    def control_messages(self) -> tuple[tuple[str, dict[str, object]], ...]:
+        return tuple(self._control_messages)
