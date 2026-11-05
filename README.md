@@ -86,14 +86,13 @@ publica da TSA deve ser configurada como confiavel. O `TorSocks5Transport`
 requer um daemon Tor ativo; sem esse daemon, o broker HTTP funciona apenas por
 ligacao direta para testes locais.
 
-## Transporte atual e futuro MQTT
+## Transporte MQTT
 
-O transporte de referencia atual e HTTP. `FederationService` depende apenas do
-contrato `BrokerInterface`, com `publish()` e `pull()`, por isso o transporte
-pode mudar sem alterar a criptografia.
+MQTT e o transporte principal da arquitetura. `FederationService` depende
+apenas do contrato `BrokerInterface`, com `publish()` e `pull()`, por isso a
+criptografia nao depende da implementacao concreta do broker.
 
-MQTT ainda nao esta instalado nem e usado. Quando for adicionado, a proposta
-de topicos sera:
+Os topicos sao:
 
 ```text
 fed/v1/relatorios
@@ -105,9 +104,11 @@ fed/v1/coordenador/epochs
 
 Os membros publicam relatorios, corroboracoes e disputas; todos os membros
 ativos subscrevem os tres primeiros topicos; o Coordinator publica revogacoes
-e epochs. O payload MQTT continuara a ser um token FedFernet cifrado. Para
-suportar membros offline, MQTT precisara de sessoes persistentes e de um
-historico duravel, ou de um endpoint `pull` complementar.
+e epochs. O payload MQTT e sempre um token FedFernet cifrado. O adaptador
+mantem uma caixa local para permitir `pull` depois de um periodo offline.
+
+O broker HTTP/local continua disponivel como fallback deterministico para
+testes, mas nao e o transporte principal da arquitetura.
 
 ## Testes
 
