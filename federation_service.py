@@ -5,10 +5,11 @@ from __future__ import annotations
 import hmac
 import json
 from dataclasses import dataclass
+from typing import Protocol
 
 from cryptography.hazmat.primitives import serialization
 
-from broker import BrokerMessage, LocalBroker
+from broker import BrokerMessage
 from coordinator import FederationCoordinator
 from fed_fernet import FedFernet
 from models import IncidentReport
@@ -23,13 +24,28 @@ class PulledReport:
     envelope: dict[str, object]
 
 
+class BrokerInterface(Protocol):
+    """Contrato comum para broker local, HTTP e futuro MQTT."""
+
+    def publish(
+        self,
+        payload: bytes,
+        *,
+        kind: str,
+        report_id: str | None,
+        epoch: int,
+    ) -> BrokerMessage: ...
+
+    def pull(self, after_sequence: int = 0) -> list[BrokerMessage]: ...
+
+
 class FederationService:
     """Publica e recupera relatorios autenticados atraves de um broker nao confiavel."""
 
     def __init__(
         self,
         coordinator: FederationCoordinator,
-        broker: LocalBroker,
+        broker: BrokerInterface,
         arbiter_public_key_pem: bytes,
         tsa: TrustedTimestampAuthority,
     ) -> None:

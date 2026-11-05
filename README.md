@@ -68,6 +68,8 @@ completa. Essa limitacao e deliberada e deve ser discutida no relatorio.
 - `broker.py`: broker local pull-based com armazenamento atomico em JSON.
 - `broker_network.py`: servidor e cliente HTTP do broker, com suporte opcional
 	para Tor.
+- `mqtt_broker.py`: adaptador MQTT com QoS 1, subscricoes e historico local
+	para membros que estiveram offline.
 - `federation_service.py`: publicacao, pull, corroboracao e disputas.
 - `tsa.py`: TSA local verificavel para testes.
 - `tor_transport.py`: transporte SOCKS5 para ligar clientes ao broker atraves
@@ -83,6 +85,29 @@ Para uma implantacao real deve ser substituida por uma TSA RFC 3161 e a chave
 publica da TSA deve ser configurada como confiavel. O `TorSocks5Transport`
 requer um daemon Tor ativo; sem esse daemon, o broker HTTP funciona apenas por
 ligacao direta para testes locais.
+
+## Transporte atual e futuro MQTT
+
+O transporte de referencia atual e HTTP. `FederationService` depende apenas do
+contrato `BrokerInterface`, com `publish()` e `pull()`, por isso o transporte
+pode mudar sem alterar a criptografia.
+
+MQTT ainda nao esta instalado nem e usado. Quando for adicionado, a proposta
+de topicos sera:
+
+```text
+fed/v1/relatorios
+fed/v1/corroboracoes/{report_id}
+fed/v1/disputas/{report_id}
+fed/v1/coordenador/revogacoes
+fed/v1/coordenador/epochs
+```
+
+Os membros publicam relatorios, corroboracoes e disputas; todos os membros
+ativos subscrevem os tres primeiros topicos; o Coordinator publica revogacoes
+e epochs. O payload MQTT continuara a ser um token FedFernet cifrado. Para
+suportar membros offline, MQTT precisara de sessoes persistentes e de um
+historico duravel, ou de um endpoint `pull` complementar.
 
 ## Testes
 

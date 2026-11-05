@@ -10,9 +10,45 @@ from broker_network import BrokerHttpClient, BrokerHttpServer
 from coordinator import FederationCoordinator
 from federation_service import FederationService
 from models import IncidentReport
+from mqtt_broker import MqttBrokerClient, TOPIC_RELATORIOS
 from tsa import TrustedTimestampAuthority
 from utils_crypto import generate_rsa_key_pair
 from utils_crypto import generate_aes_key
+
+
+class FakeMqttResult:
+    rc = 0
+
+
+class FakeMqttClient:
+    def __init__(self, _client_id: str) -> None:
+        self.on_connect = None
+        self.on_message = None
+        self.published: list[tuple[str, bytes, int]] = []
+        self.subscriptions: list[object] = []
+
+    def connect(self, _host: str, _port: int, _keepalive: int) -> None:
+        self.on_connect(self, None, {}, 0, None)
+
+    def loop_start(self) -> None:
+        return
+
+    def loop_stop(self) -> None:
+        return
+
+    def disconnect(self) -> None:
+        return
+
+    def subscribe(self, topics: object) -> None:
+        self.subscriptions.append(topics)
+
+    def publish(self, topic: str, payload: bytes, qos: int) -> FakeMqttResult:
+        self.published.append((topic, payload, qos))
+        return FakeMqttResult()
+
+    def receive(self, payload: bytes) -> None:
+        message = type("Mensagem", (), {"payload": payload})()
+        self.on_message(self, None, message)
 
 
 class FederationProtocolTests(unittest.TestCase):
@@ -158,6 +194,77 @@ class FederationProtocolTests(unittest.TestCase):
             self.assertEqual(client.pull()[0].payload, b"FF1.0.encrypted")
         finally:
             server.stop()
+
+    def test_full_service_flow_over_http_broker(self) -> None:
+        server = BrokerHttpServer(str(Path(self.tempdir.name) / "service-broker"))
+        server.start()
+        try:
+            host, port = server.address
+            service = FederationService(
+                self.coordinator,
+                BrokerHttpClient(host, port),
+                self.arbiter_public,
+                self.tsa,
+            )
+            service.publish_report(self.report, "member-a", self.member_a_private)
+            pulled = service.pull_reports()
+            self.assertEqual(pulled[0].report, self.report)
+
+            service.publish_corroboration(
+                self.report.report_id,
+                pulled[0].envelope["linkability_tag"],
+                "member-b",
+                self.member_b_private,
+            )
+            self.assertEqual(service.count_corroborations(self.report.report_id), 1)
+
+            dispute = service.publish_dispute(
+                self.report.report_id,
+                "necessita de verificacao adicional",
+                "member-b",
+                self.member_b_private,
+            )
+            self.assertEqual(service.trace_dispute(dispute, self.arbiter_private), "member-b")
+        finally:
+            server.stop()
+
+    def test_mqtt_adapter_publishes_and_stores_received_messages(self) -> None:
+        clientes: list[FakeMqttClient] = []
+
+        def criar_cliente(client_id: str) -> FakeMqttClient:
+            cliente = FakeMqttClient(client_id)
+            clientes.append(cliente)
+            return cliente
+
+        mqtt_broker = MqttBrokerClient(
+            Path(self.tempdir.name) / "mqtt-inbox",
+            "broker.test",
+            mqtt_client_factory=criar_cliente,
+        )
+        mqtt_broker.connect()
+        try:
+            mensagem = mqtt_broker.publish(
+                b"FF1.0.payload-cifrado",
+                kind="report",
+                report_id=self.report.report_id,
+                epoch=0,
+            )
+            cliente = clientes[0]
+            self.assertEqual(cliente.published[0][0], TOPIC_RELATORIOS)
+            self.assertEqual(cliente.published[0][2], 1)
+            self.assertEqual(
+                tuple(cliente.subscriptions[0]),
+                tuple((topic, 1) for topic in mqtt_broker.subscribed_topics),
+            )
+
+            recebido = mensagem.to_dict()
+            recebido["message_id"] = str(uuid4())
+            recebido["sequence"] = 99
+            cliente.receive(json.dumps(recebido).encode("utf-8"))
+            mensagens = mqtt_broker.pull()
+            self.assertEqual(len(mensagens), 2)
+        finally:
+            mqtt_broker.close()
 
 
 if __name__ == "__main__":
