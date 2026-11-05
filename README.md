@@ -1,54 +1,84 @@
 # FedFernet
 
-Primeira fundacao do projeto de partilha federada de incidentes de seguranca.
+Plataforma de partilha confidencial de incidentes de seguranca entre membros
+de uma federacao. Esta implementacao e um prototipo executavel para o projeto
+de Criptografia Aplicada.
 
-## Estado atual
-
-- `utils_crypto.py` gera e carrega chaves RSA-2048 e AES-256 em PEM/bytes.
-- `fed_fernet.py` cria envelopes AES-GCM com `epoch` e AAD.
-- A assinatura RSA e a identidade do membro ficam num cofre hibrido cifrado para
-	o Arbiter (AES-GCM + RSA-OAEP).
-- O `linkability_tag` e um HMAC deterministico por membro e `report_id`.
-- `open()` abre o envelope sem revelar a identidade.
-- `open_trace()` e a operacao reservada ao Arbiter e verifica a assinatura antes
-	de devolver o membro identificado.
-
-## Limitacao intencional
-
-Isto e um simulador logico, nao uma implementacao real de group signatures.
-Nesta fase, os membros ainda nao conseguem verificar anonimamente que uma
-assinatura pertence a um membro valido sem conhecer a chave publica individual.
-Essa sera a proxima camada do projeto, depois de estabilizar o formato do
-envelope e os testes criptograficos.
-
-## Exemplo de fluxo
-
-```python
-from fed_fernet import FedFernet
-from utils_crypto import generate_aes_key, generate_rsa_key_pair
-
-member_private, _ = generate_rsa_key_pair()
-arbiter_private, arbiter_public = generate_rsa_key_pair()
-federation_key = generate_aes_key()
-
-token = FedFernet.seal(
-		b'{"report_id":"r-1","incident_type":"ddos"}',
-		federation_key,
-		member_private,
-		"member-a",
-		arbiter_public,
-		"r-1",
-		b"tsa-token",
-		epoch=0,
-)
-opened = FedFernet.open(token, federation_key)
-member_id = FedFernet.open_trace(
-		opened["trace_vault"], arbiter_private, opened["plaintext"]
-)
-```
-
-Instalar dependencias:
+## Arquitetura
 
 ```text
-pip install -r requirements.txt
+Membro -> Tor/SOCKS5 -> Broker -> todos os membros ativos
+												 |
+												 +-- historico pull-based
+
+Coordinator: membros, revogacao, epochs e chaves AES da federacao
+TSA: tokens de timestamp assinados
+Arbiter: abre o trace_vault apenas em disputas autorizadas
 ```
+
+O broker guarda apenas tokens `FedFernet` cifrados. Nao consegue ler o
+relatorio, a identidade, a assinatura ou o conteudo das corroboracoes.
+
+## Formato do relatorio
+
+O plaintext segue o formato exigido pelo enunciado:
+
+```json
+{
+	"report_id": "3f1c2a9e-7b4d-4e8a-9c21-5d6f0a1b2c3d",
+	"incident_type": "ddos",
+	"indicators": {
+		"source_prefixes": ["203.0.113.0/24"],
+		"source_asns": [64500],
+		"destination_ports": [53],
+		"protocols": ["udp"]
+	},
+	"observation_period": {
+		"start": "2026-11-20T14:05:00Z",
+		"end": "2026-11-20T14:47:00Z"
+	},
+	"severity": "high",
+	"recommended_mitigation": "rate_limiting"
+}
+```
+
+`models.py` valida UUID, campos obrigatorios, valores permitidos e timestamps
+UTC ISO 8601 antes de qualquer publicacao.
+
+## Criptografia
+
+- AES-256-GCM protege cada envelope e fornece confidencialidade e integridade.
+- RSA-PSS assina o plaintext do relatorio.
+- A simulacao de group signatures testa a assinatura contra as chaves dos
+	membros sem revelar qual chave correspondeu.
+- RSA-OAEP protege a chave do `trace_vault` para o Arbiter.
+- O `linkability_tag` e deterministico por membro e por relatorio, permitindo
+	impedir autocorroboracao e corroboracao duplicada sem expor o membro.
+- `TrustedTimestampAuthority` assina tokens que ficam ligados ao hash do
+	relatorio e permitem verificar o timestamp.
+
+Esta e uma simulacao simples de group signatures, nao uma construcao academica
+de group signatures. Essa limitacao e deliberada e deve ser discutida no
+relatorio.
+
+## Componentes
+
+- `models.py`: JSON validado de incidentes.
+- `fed_fernet.py`: envelope cifrado, assinatura e trace do Arbiter.
+- `coordinator.py`: registo, revogacao, persistencia e rotacao de epochs.
+- `broker.py`: broker local pull-based com armazenamento atomico em JSON.
+- `federation_service.py`: publicacao, pull, corroboracao e disputas.
+- `tsa.py`: TSA local verificavel para testes.
+- `tor_transport.py`: transporte SOCKS5 para ligar clientes a um broker atraves
+	de Tor (`127.0.0.1:9050` por defeito).
+
+## Testes
+
+```powershell
+python -m pip install -r requirements.txt
+python -m unittest -v
+```
+
+A suite cobre envelopes, adulteracao, chaves erradas, membros autorizados,
+corroboracao unica, revogacao, rotacao de chaves, persistencia, TSA, pull
+offline e confidencialidade perante o broker.
