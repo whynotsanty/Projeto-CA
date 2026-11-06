@@ -44,10 +44,12 @@ class FederationGroup:
         except KeyError as exc:
             raise ValueError(f"member is not registered: {member_id}") from exc
 
-    def verify(self, plaintext: bytes, signature: bytes) -> bool:
+    def verify(
+        self, plaintext: bytes, signature: bytes, *, context: str | None = None
+    ) -> bool:
         """Verifica a participacao sem revelar qual membro correspondeu."""
         return FedFernet.verify_group_signature(
-            plaintext, signature, list(self._members.values())
+            plaintext, signature, list(self._members.values()), context=context
         )
 
     @property
@@ -73,6 +75,7 @@ class FedFernet:
         timestamp_token: bytes,
         *,
         epoch: int = 0,
+        context: str | None = None,
     ) -> bytes:
         """Cria um envelope AES-256-GCM.
 
@@ -84,6 +87,7 @@ class FedFernet:
         _require_aes_key(federation_key)
         if not member_id or not report_id:
             raise ValueError("member_id and report_id are required")
+        signing_context = context or report_id
 
         signer_private_key = load_private_key(signer_private_key_pem)
         arbiter_public_key = load_public_key(arbiter_public_key_pem)
@@ -91,12 +95,15 @@ class FedFernet:
             serialization.Encoding.PEM,
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )
-        signature = sign(signer_private_key, plaintext)
+        signature = sign(
+            signer_private_key, FedFernet.signature_payload(plaintext, signing_context)
+        )
 
         trace_data = _canonical_json(
             {
                 "member_id": member_id,
                 "report_id": report_id,
+                "context": signing_context,
                 "signature": _b64(signature),
                 "signer_public_key": _b64(signer_public_key_pem),
             }
@@ -116,7 +123,7 @@ class FedFernet:
         )
 
         linkability_tag = FedFernet.make_linkability_tag(
-            signer_private_key_pem, report_id
+            signer_private_key_pem, signing_context
         )
         envelope = {
             "version": FedFernet.VERSION,
