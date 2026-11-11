@@ -65,50 +65,71 @@ completa. Essa limitacao e deliberada e deve ser discutida no relatorio.
 - `models.py`: modelo JSON validado dos incidentes.
 - `fed_fernet.py`: envelope cifrado, assinatura e trace do Arbiter.
 - `coordinator.py`: registo, revogacao, persistencia e rotacao de epochs.
-- `broker.py`: broker local pull-based com armazenamento atomico em JSON.
-- `broker_network.py`: servidor e cliente HTTP do broker, com suporte opcional
-	para Tor.
-- `mqtt_broker.py`: adaptador MQTT com QoS 1, subscricoes e historico local
-	para membros que estiveram offline.
+- `kafka_broker.py`: adaptador Kafka com log duravel, offsets e replay para
+	membros que estiveram offline, incluindo remocao de ACLs na revogacao.
+- `tor_transport.py`: transporte SOCKS5 para ligar Kafka atraves de um daemon
+	Tor real.
 - `federation_service.py`: publicacao, pull, corroboracao e disputas.
 - `tsa.py`: TSA local verificavel para testes.
-- `tor_transport.py`: transporte SOCKS5 para ligar clientes ao broker atraves
-	de Tor (`127.0.0.1:9050` por defeito).
 
 O estado do Coordinator recebe uma chave AES-256 separada no construtor. Essa
 chave nao deve ser guardada no mesmo ficheiro JSON; deve ser fornecida pelo
 ambiente seguro do processo do Coordinator. Os epochs ficam cifrados com
 AES-GCM dentro do estado persistente.
 
-O `TrustedTimestampAuthority` e uma TSA local verificavel para o prototipo.
-Para uma implantacao real deve ser substituida por uma TSA RFC 3161 e a chave
-publica da TSA deve ser configurada como confiavel. O `TorSocks5Transport`
-requer um daemon Tor ativo; sem esse daemon, o broker HTTP funciona apenas por
-ligacao direta para testes locais.
+O `TrustedTimestampAuthority` e uma TSA local verificavel baseada nos campos
+essenciais do RFC 3161: `messageImprint`, SHA-256, politica, numero de serie,
+nonce, `genTime`, estado `granted` e assinatura da TSA. O token e transportado
+em JSON para manter o prototipo simples; nao e uma implementacao DER completa
+de `TimeStampResp`. Para uma implantacao real, a mesma interface deve ser
+ligada a uma TSA RFC 3161 externa ou substituida por uma resposta ASN.1 DER.
 
-## Transporte MQTT
+## Transporte Kafka
 
-MQTT e o transporte principal da arquitetura. `FederationService` depende
+Kafka e o transporte principal da arquitetura. `FederationService` depende
 apenas do contrato `BrokerInterface`, com `publish()` e `pull()`, por isso a
-criptografia nao depende da implementacao concreta do broker.
+criptografia nao depende da implementacao concreta do broker. O offset Kafka
+e usado como `sequence`, permitindo recuperar mensagens depois de uma
+desconexao sem criar um broker proprio. O topico `fed.v1.events` deve ser
+criado com uma particao para manter o `sequence` global baseado no offset.
 
-Os topicos sao:
+Antes de iniciar os membros, crie os topicos explicitamente no cluster:
 
-```text
-fed/v1/relatorios
-fed/v1/corroboracoes/{report_id}
-fed/v1/disputas/{report_id}
-fed/v1/coordenador/revogacoes
-fed/v1/coordenador/epochs
+```powershell
+kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists --topic fed.v1.events --partitions 1 --replication-factor 1
+kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists --topic fed.v1.coordinator.revocations --partitions 1 --replication-factor 1
+kafka-topics --bootstrap-server localhost:9092 --create --if-not-exists --topic fed.v1.coordinator.epochs --partitions 1 --replication-factor 1
 ```
 
-Os membros publicam relatorios, corroboracoes e disputas; todos os membros
-ativos subscrevem os tres primeiros topicos; o Coordinator publica revogacoes
-e epochs. O payload MQTT e sempre um token FedFernet cifrado. O adaptador
-mantem uma caixa local para permitir `pull` depois de um periodo offline.
+Os topicos Kafka sao:
 
-O broker HTTP/local continua disponivel como fallback deterministico para
-testes, mas nao e o transporte principal da arquitetura.
+```text
+fed.v1.events
+fed.v1.coordinator.revocations
+fed.v1.coordinator.epochs
+```
+
+Os membros publicam relatorios, corroboracoes e disputas em `fed.v1.events`;
+o Coordinator publica revogacoes e epochs nos topicos de controlo. O payload
+Kafka e sempre um token FedFernet cifrado.
+
+## Revogacao no Kafka
+
+Como defesa em profundidade, o Coordinator pode receber um
+`KafkaAccessController` configurado com as credenciais administrativas do
+cluster. Ao revogar `member-a`, ele remove as ACLs do principal
+`User:member-a`. O Kafka deve estar configurado com autenticacao TLS ou SASL
+e cada membro deve usar um principal proprio. A rotacao do epoch continua a
+ser a protecao criptografica principal; a ACL impede que o membro revogado
+continue a publicar ou consumir atraves da infraestrutura.
+
+Quando o requisito de anonimato estiver ativo, crie o cliente com
+`TorSocks5Transport` e passe-o para `KafkaBrokerClient`. O adaptador instala
+SOCKS5 no processo com `rdns=True`, por isso o destino e resolvido pelo Tor e
+nao pelo DNS local. O daemon Tor deve estar ativo (por defeito em
+`127.0.0.1:9050`) e o endereco Kafka deve ser alcancavel atraves da rede Tor.
+O teste de demonstracao deve abrir uma ligacao SOCKS5 real e depois executar o
+fluxo Kafka usando esse transporte; uma simulacao nao satisfaz este requisito.
 
 ## Testes
 
@@ -119,4 +140,4 @@ python -m unittest -v
 
 A suite cobre envelopes, adulteracao, chaves erradas, membros autorizados,
 corroboracao unica, revogacao, rotacao de chaves, persistencia, TSA, pull
-offline, broker HTTP e confidencialidade perante o broker.
+offline, Kafka e confidencialidade perante o broker.

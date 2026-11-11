@@ -32,6 +32,7 @@ class FedFernetTests(unittest.TestCase):
                 opened["plaintext"],
                 opened["group_signature"],
                 [self.member_public],
+                context="r-1",
             )
         )
         self.assertEqual(
@@ -60,11 +61,19 @@ class FedFernetTests(unittest.TestCase):
         group.add_member("member-b", second_member_public)
 
         opened = FedFernet.open(self._seal(), self.federation_key)
-        self.assertTrue(group.verify(opened["plaintext"], opened["group_signature"]))
+        self.assertTrue(
+            group.verify(
+                opened["plaintext"], opened["group_signature"], context="r-1"
+            )
+        )
         self.assertEqual(group.member_ids, ("member-a", "member-b"))
 
         group.remove_member("member-a")
-        self.assertFalse(group.verify(opened["plaintext"], opened["group_signature"]))
+        self.assertFalse(
+            group.verify(
+                opened["plaintext"], opened["group_signature"], context="r-1"
+            )
+        )
 
         second_token = FedFernet.seal(
             self.plaintext,
@@ -78,7 +87,9 @@ class FedFernetTests(unittest.TestCase):
         second_opened = FedFernet.open(second_token, self.federation_key)
         self.assertTrue(
             group.verify(
-                second_opened["plaintext"], second_opened["group_signature"]
+                second_opened["plaintext"],
+                second_opened["group_signature"],
+                context="r-1",
             )
         )
 

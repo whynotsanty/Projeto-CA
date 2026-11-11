@@ -9,9 +9,9 @@ from typing import Protocol
 
 from cryptography.hazmat.primitives import serialization
 
-from broker import BrokerMessage
 from coordinator import FederationCoordinator
 from fed_fernet import FedFernet
+from kafka_broker import BrokerMessage
 from models import IncidentReport
 from tsa import TrustedTimestampAuthority
 from utils_crypto import load_private_key
@@ -25,7 +25,7 @@ class PulledReport:
 
 
 class BrokerInterface(Protocol):
-    """Contrato comum para broker local, HTTP e futuro MQTT."""
+    """Contrato Kafka usado pelo fluxo da federacao."""
 
     def publish(
         self,
@@ -58,7 +58,7 @@ class FederationService:
     def _verify_timestamp(self, message: BrokerMessage, payload: bytes, token: bytes) -> None:
         try:
             timestamp_data = json.loads(token)
-            serial = str(timestamp_data["serial"])
+            serial = str(timestamp_data["serial_number"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("timestamp token invalido") from exc
         previous_message = next(
@@ -124,6 +124,7 @@ class FederationService:
                 plaintext,
                 envelope["group_signature"],
                 self.coordinator.all_public_keys(),
+                context=message.report_id or "",
             ):
                 raise ValueError("report is not signed by an active member")
             report = IncidentReport.from_json(plaintext)
@@ -153,6 +154,7 @@ class FederationService:
                 content,
                 envelope["group_signature"],
                 self.coordinator.all_public_keys(),
+                context=report_id,
             ):
                 raise ValueError("assinatura de corroboracao invalida")
             self._verify_timestamp(message, content, envelope["timestamp_token"])

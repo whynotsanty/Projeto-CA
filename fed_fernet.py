@@ -48,6 +48,8 @@ class FederationGroup:
         self, plaintext: bytes, signature: bytes, *, context: str | None = None
     ) -> bool:
         """Verifica a participacao sem revelar qual membro correspondeu."""
+        if context is None:
+            raise ValueError("signature context is required")
         return FedFernet.verify_group_signature(
             plaintext, signature, list(self._members.values()), context=context
         )
@@ -198,19 +200,29 @@ class FedFernet:
         plaintext: bytes,
         signature: bytes,
         member_public_keys_pem: list[bytes],
+        *,
+        context: str,
     ) -> bool:
-        """Check membership without identifying which member signed.
+        """Verifica a assinatura sem revelar qual membro correspondeu.
 
-        This is the easy simulation: try the signature against the federation
-        member keys and return only whether one of them matches.
+        Esta e uma simulacao simples: testa a assinatura contra as chaves
+        publicas autorizadas e devolve apenas se alguma corresponde.
         """
+        signed_payload = FedFernet.signature_payload(plaintext, context)
         for public_key_pem in member_public_keys_pem:
             try:
-                verify(load_public_key(public_key_pem), signature, plaintext)
+                verify(load_public_key(public_key_pem), signature, signed_payload)
             except InvalidSignature:
                 continue
             return True
         return False
+
+    @staticmethod
+    def signature_payload(plaintext: bytes, context: str) -> bytes:
+        """Cria a representacao canonica protegida pela assinatura do membro."""
+        if not context:
+            raise ValueError("signature context is required")
+        return _canonical_json({"context": context, "plaintext": _b64(plaintext)})
 
     @staticmethod
     def make_linkability_tag(signer_private_key_pem: bytes, report_id: str) -> bytes:
@@ -247,7 +259,7 @@ class FedFernet:
         verify(
             load_public_key(_unb64(trace["signer_public_key"])),
             _unb64(trace["signature"]),
-            plaintext,
+            FedFernet.signature_payload(plaintext, trace["context"]),
         )
         return trace["member_id"]
 

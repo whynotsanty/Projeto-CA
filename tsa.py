@@ -5,8 +5,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import secrets
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
 
 from cryptography.hazmat.primitives import serialization
 
@@ -14,7 +14,9 @@ from utils_crypto import generate_rsa_key_pair, load_private_key, load_public_ke
 
 
 class TrustedTimestampAuthority:
-    """Emite tokens assinados e verifica a carga associada."""
+    """TSA local baseada nos campos essenciais do RFC 3161."""
+
+    POLICY_OID = "1.3.6.1.4.1.55555.1.1"
 
     def __init__(self, private_key_pem: bytes | None = None) -> None:
         if private_key_pem is None:
@@ -31,13 +33,22 @@ class TrustedTimestampAuthority:
 
     def issue(self, payload: bytes) -> bytes:
         digest = hashlib.sha256(payload).hexdigest()
+        issued_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+            "+00:00", "Z"
+        )
         unsigned = {
+            "type": "TimeStampResp",
+            "status": {"status": "granted"},
             "version": 1,
-            "serial": str(uuid4()),
-            "issued_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
-                "+00:00", "Z"
-            ),
-            "sha256": digest,
+            "serial_number": str(secrets.randbits(128)),
+            "policy_oid": self.POLICY_OID,
+            "message_imprint": {
+                "hash_algorithm": "sha256",
+                "hashed_message": digest,
+            },
+            "nonce": str(secrets.randbits(128)),
+            "gen_time": issued_at,
+            "cert_req": True,
         }
         encoded = json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("utf-8")
         token = dict(unsigned)
@@ -57,13 +68,22 @@ class TrustedTimestampAuthority:
         try:
             value = json.loads(token)
             signature = base64.urlsafe_b64decode(value.pop("signature").encode("ascii"))
-            issued_at = datetime.fromisoformat(value["issued_at"].replace("Z", "+00:00"))
+            issued_at = datetime.fromisoformat(value["gen_time"].replace("Z", "+00:00"))
             encoded = json.dumps(
                 value, sort_keys=True, separators=(",", ":")
             ).encode("utf-8")
-            if value.get("version") != 1:
-                return False
-            if value.get("sha256") != hashlib.sha256(payload).hexdigest():
+            imprint = value["message_imprint"]
+            digest = hashlib.sha256(payload).hexdigest()
+            if (
+                value.get("type") != "TimeStampResp"
+                or value.get("status", {}).get("status") != "granted"
+                or value.get("version") != 1
+                or value.get("policy_oid") != TrustedTimestampAuthority.POLICY_OID
+                or imprint.get("hash_algorithm") != "sha256"
+                or imprint.get("hashed_message") != digest
+                or not value.get("serial_number")
+                or not value.get("nonce")
+            ):
                 return False
             if issued_at > datetime.now(timezone.utc) + timedelta(
                 seconds=maximum_future_seconds

@@ -7,21 +7,33 @@ import json
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from utils_crypto import generate_aes_key, load_public_key
 
 
+class MemberAccessController(Protocol):
+    """Autoridade externa que pode bloquear o acesso Kafka de um membro."""
+
+    def revoke_member_access(self, member_id: str) -> None: ...
+
+
 class FederationCoordinator:
     """Gere membros, revogacao e epochs das chaves da federacao."""
 
-    def __init__(self, state_path: str | Path, state_encryption_key: bytes) -> None:
+    def __init__(
+        self,
+        state_path: str | Path,
+        state_encryption_key: bytes,
+        access_controller: MemberAccessController | None = None,
+    ) -> None:
         self.state_path = Path(state_path)
         if len(state_encryption_key) != 32:
             raise ValueError("a chave do estado deve ter 32 bytes")
         self._state_encryption_key = state_encryption_key
+        self._access_controller = access_controller
         self._members: dict[str, str] = {}
         self._revoked: set[str] = set()
         self._revocations: dict[str, dict[str, Any]] = {}
@@ -68,6 +80,8 @@ class FederationCoordinator:
             "reason": reason,
         }
         self.rotate_key()
+        if self._access_controller is not None:
+            self._access_controller.revoke_member_access(member_id)
 
     def is_active(self, member_id: str) -> bool:
         return member_id in self._members and member_id not in self._revoked
